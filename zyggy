@@ -1,140 +1,479 @@
 #!/usr/bin/env python3
 
+import re
 import sys
-import subprocess
-from PyQt6.QtWidgets import (
-    QApplication, QMainWindow, QComboBox, QToolBar, QPushButton, QTableView,
-    QVBoxLayout, QWidget, QHeaderView, QMessageBox
-)
-from PyQt6.QtGui import QStandardItemModel, QStandardItem, QAction
-from PyQt6.QtCore import Qt
+from subprocess import Popen, PIPE
+from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
+                            QTreeView, QHeaderView, QComboBox, QPushButton, QMessageBox, 
+                            QInputDialog, QDialog, QScrollArea, QFrame, QSizePolicy)
+from PyQt6.QtGui import QStandardItemModel, QStandardItem, QIcon
+from PyQt6.QtCore import Qt, QSize
 
 DATASETS = 0
 SNAPSHOTS = 1
 VOLUMES = 2
 POOLS = 3
 
-
 def has_zfs():
-    result = subprocess.run(["which", "zfs"], capture_output=True)
-    return result.stdout.strip() != b''
+    process = Popen(["which", "zfs"], stdout=PIPE, stderr=PIPE)
+    stdout, _ = process.communicate()
+    return stdout != b''
 
-
-class ZFSApp(QMainWindow):
+class App(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Zyggy - ZFS Administration GUI")
+        self.done = False
+        self.init_ui()
+        
+    def init_ui(self):
+        """Initialize the user interface"""
+        self.setWindowTitle("Zyggy")
+        self.setWindowIcon(QIcon.fromTheme("blockify"))
         self.resize(800, 600)
-
-        self.table = QTableView()
-        self.model = QStandardItemModel()
-        self.table.setModel(self.model)
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-
+        
+        # Central widget
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
+        main_layout = QVBoxLayout(central_widget)
+        main_layout.setContentsMargins(10, 10, 10, 10)
+        
+        # Toolbar
+        toolbar = QWidget()
+        toolbar_layout = QHBoxLayout(toolbar)
+        toolbar_layout.setContentsMargins(0, 0, 0, 0)
+        
+        # Buttons
+        self.btn_refresh = QPushButton()
+        self.btn_refresh.setIcon(QIcon.fromTheme("view-refresh"))
+        self.btn_refresh.setToolTip("Refresh")
+        
+        self.btn_new = QPushButton()
+        self.btn_new.setIcon(QIcon.fromTheme("document-new"))
+        self.btn_new.setToolTip("New")
+        
+        self.btn_rename = QPushButton()
+        self.btn_rename.setIcon(QIcon.fromTheme("edit-rename"))
+        self.btn_rename.setToolTip("Rename")
+        
+        self.btn_copy = QPushButton()
+        self.btn_copy.setIcon(QIcon.fromTheme("edit-copy"))
+        self.btn_copy.setToolTip("Copy")
+        
+        self.btn_up = QPushButton()
+        self.btn_up.setIcon(QIcon.fromTheme("go-up"))
+        self.btn_up.setToolTip("Promote")
+        
+        self.btn_delete = QPushButton()
+        self.btn_delete.setIcon(QIcon.fromTheme("edit-delete"))
+        self.btn_delete.setToolTip("Remove")
+        
+        self.btn_undo = QPushButton()
+        self.btn_undo.setIcon(QIcon.fromTheme("edit-undo"))
+        self.btn_undo.setToolTip("Rollback")
+        
+        self.btn_properties = QPushButton()
+        self.btn_properties.setIcon(QIcon.fromTheme("document-properties"))
+        self.btn_properties.setToolTip("Get All")
+        
+        self.btn_about = QPushButton()
+        self.btn_about.setIcon(QIcon.fromTheme("help-about"))
+        self.btn_about.setToolTip("About")
+        
+        # Mode selector
         self.cmb_mode = QComboBox()
         self.cmb_mode.addItems(["Datasets", "Snapshots", "Volumes", "Pools"])
         self.cmb_mode.setCurrentIndex(DATASETS)
+        
+        # Tree view
+        self.tree = QTreeView()
+        self.tree.setSelectionBehavior(QTreeView.SelectionBehavior.SelectRows)
+        self.tree.setSelectionMode(QTreeView.SelectionMode.SingleSelection)
+        self.tree.setUniformRowHeights(True)
+        self.tree.setSortingEnabled(True)
+        
+        # Model
+        self.model = QStandardItemModel()
+        self.tree.setModel(self.model)
+        
+        # Layout
+        left_toolbar = QHBoxLayout()
+        left_toolbar.addWidget(self.btn_refresh)
+        left_toolbar.addWidget(self.btn_new)
+        left_toolbar.addWidget(self.btn_rename)
+        left_toolbar.addWidget(self.btn_up)
+        left_toolbar.addWidget(self.btn_copy)
+        left_toolbar.addWidget(self.btn_delete)
+        left_toolbar.addWidget(self.btn_undo)
+        left_toolbar.addWidget(self.btn_properties)
+        
+        right_toolbar = QHBoxLayout()
+        right_toolbar.addWidget(self.cmb_mode)
+        right_toolbar.addWidget(self.btn_about)
+        
+        toolbar_layout.addLayout(left_toolbar)
+        toolbar_layout.addStretch()
+        toolbar_layout.addLayout(right_toolbar)
+        
+        # Scroll area
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setWidget(self.tree)
+        
+        main_layout.addWidget(toolbar)
+        main_layout.addWidget(scroll_area)
+        
+        # Connect signals
+        self.btn_refresh.clicked.connect(self.update)
+        self.btn_new.clicked.connect(self.on_new_click)
+        self.btn_rename.clicked.connect(self.on_rename_click)
+        self.btn_copy.clicked.connect(self.on_copy_click)
+        self.btn_up.clicked.connect(self.on_up_click)
+        self.btn_undo.clicked.connect(self.on_undo_click)
+        self.btn_delete.clicked.connect(self.on_delete_click)
+        self.btn_properties.clicked.connect(self.on_properties_click)
+        self.btn_about.clicked.connect(self.on_about_click)
         self.cmb_mode.currentIndexChanged.connect(self.on_mode_change)
-
-        self.toolbar = QToolBar("ZFS Toolbar")
-        self.addToolBar(self.toolbar)
-
-        self.btn_refresh = self.add_toolbar_button("⟳", "Refresh", self.update_table)
-        self.btn_new = self.add_toolbar_button("＋", "New", self.on_new_click)
-        self.btn_rename = self.add_toolbar_button("✎", "Rename", self.on_rename_click)
-        self.btn_copy = self.add_toolbar_button("⧉", "Copy", self.on_copy_click)
-        self.btn_up = self.add_toolbar_button("⇧", "Promote", self.on_up_click)
-        self.btn_delete = self.add_toolbar_button("🗑", "Delete", self.on_delete_click)
-        self.btn_undo = self.add_toolbar_button("↶", "Rollback", self.on_undo_click)
-        self.btn_properties = self.add_toolbar_button("ℹ", "Properties", self.on_properties_click)
-        self.btn_about = self.add_toolbar_button("❓", "About", self.on_about_click)
-
-        self.toolbar.addWidget(self.cmb_mode)
-
-        layout = QVBoxLayout()
-        layout.addWidget(self.table)
-
-        container = QWidget()
-        container.setLayout(layout)
-        self.setCentralWidget(container)
-
-        self.update_table()
-
-    def add_toolbar_button(self, label, tooltip, slot):
-        btn = QPushButton(label)
-        btn.setToolTip(tooltip)
-        btn.clicked.connect(slot)
-        self.toolbar.addWidget(btn)
-        return btn
-
-    def update_table(self):
-        mode = self.cmb_mode.currentIndex()
-        if mode == DATASETS:
+        
+        # Initial update
+        self.on_mode_change(DATASETS)
+    
+    def update(self):
+        """Updates list of ZFS (Dataset, Volume and Snapshot) and ZPOOL elements"""
+        self.model.clear()
+        
+        cmd = []
+        active = self.cmb_mode.currentIndex()
+        
+        if active == DATASETS:
             cmd = ["zfs", "list", "-o", "name,used,avail,volsize,mountpoint", "-t", "filesystem"]
-        elif mode == SNAPSHOTS:
+        elif active == SNAPSHOTS:
             cmd = ["zfs", "list", "-o", "name,used,avail,volsize,mountpoint", "-t", "snapshot"]
-        elif mode == VOLUMES:
+        elif active == VOLUMES:
             cmd = ["zfs", "list", "-o", "name,used,avail,volsize,mountpoint", "-t", "volume"]
-        elif mode == POOLS:
+        elif active == POOLS:
             cmd = ["zpool", "list", "-o", "name,alloc,free,size,health"]
+        
+        process = Popen(cmd, stdout=PIPE, stderr=PIPE)
+        stdout, stderr = process.communicate()
+        
+        if stderr != b'' and stderr != b'no datasets available\n':
+            error = stderr.decode('utf-8')
+            print("Error:", error)
+            self.error_dialog(error)
+            return
+        
+        result = []
+        output = stdout.decode('utf-8')
+        for line in output.splitlines():
+            rows = line.split()
+            result.append(rows)
+        
+        if len(result) > 0:
+            columns = result[0]
+            self.model.setHorizontalHeaderLabels(columns)
+            
+            for row in result[1:]:
+                items = [QStandardItem(item) for item in row]
+                self.model.appendRow(items)
+            
+            for i in range(len(columns)):
+                self.tree.resizeColumnToContents(i)
+    
+    def on_mode_change(self, index):
+        """Handle mode change in the combobox"""
+        if index == DATASETS:
+            self.btn_new.setEnabled(True)
+            self.btn_new.setToolTip("zfs create")
+            
+            self.btn_rename.setEnabled(True)
+            self.btn_rename.setToolTip("zfs rename")
+            
+            self.btn_copy.setEnabled(True)
+            self.btn_copy.setToolTip("zfs snapshot")
+            
+            self.btn_up.setEnabled(True)
+            self.btn_up.setToolTip("zfs promote")
+            
+            self.btn_undo.setEnabled(False)
+            self.btn_undo.setToolTip("")
+            
+            self.btn_delete.setEnabled(True)
+            self.btn_delete.setToolTip("zfs remove")
+            
+            self.btn_properties.setEnabled(True)
+            self.btn_properties.setToolTip("zfs get all")
+            
+        elif index == SNAPSHOTS:
+            self.btn_new.setEnabled(False)
+            self.btn_new.setToolTip("")
+            
+            self.btn_rename.setEnabled(True)
+            self.btn_rename.setToolTip("zfs rename")
+            
+            self.btn_copy.setEnabled(True)
+            self.btn_copy.setToolTip("zfs clone")
+            
+            self.btn_up.setEnabled(False)
+            self.btn_up.setToolTip("")
+            
+            self.btn_undo.setEnabled(True)
+            self.btn_undo.setToolTip("Rollback")
+            
+            self.btn_delete.setEnabled(True)
+            self.btn_delete.setToolTip("zfs remove")
+            
+            self.btn_properties.setEnabled(True)
+            self.btn_properties.setToolTip("zfs get all")
+            
+        elif index == VOLUMES:
+            self.btn_new.setEnabled(True)
+            self.btn_new.setToolTip("zfs create -V")
+            
+            self.btn_rename.setEnabled(True)
+            self.btn_rename.setToolTip("zfs rename")
+            
+            self.btn_copy.setEnabled(True)
+            self.btn_copy.setToolTip("zfs snapshot")
+            
+            self.btn_up.setEnabled(True)
+            self.btn_up.setToolTip("zfs promote")
+            
+            self.btn_undo.setEnabled(False)
+            self.btn_undo.setToolTip("")
+            
+            self.btn_delete.setEnabled(True)
+            self.btn_delete.setToolTip("zfs remove")
+            
+            self.btn_properties.setEnabled(True)
+            self.btn_properties.setToolTip("zfs get all")
+            
+        elif index == POOLS:
+            self.btn_new.setEnabled(False)
+            self.btn_new.setToolTip("")
+            
+            self.btn_rename.setEnabled(True)
+            self.btn_rename.setToolTip("zpool rename")
+            
+            self.btn_copy.setEnabled(False)
+            self.btn_copy.setToolTip("")
+            
+            self.btn_up.setEnabled(False)
+            self.btn_up.setToolTip("")
+            
+            self.btn_undo.setEnabled(False)
+            self.btn_undo.setToolTip("")
+            
+            self.btn_delete.setEnabled(True)
+            self.btn_delete.setToolTip("zpool remove")
+            
+            self.btn_properties.setEnabled(True)
+            self.btn_properties.setToolTip("zpool get all")
+        
+        self.update()
+    
+    def get_selected_item(self):
+        """Get the currently selected item in the tree view"""
+        selected = self.tree.selectedIndexes()
+        if selected:
+            return selected[0].data()
+        return ""
+    
+    def on_new_click(self):
+        """Handle new button click"""
+        mode = self.cmb_mode.currentIndex()
+        target = self.get_selected_item()
+        if target != "": target += "/"
+        
+        if mode == DATASETS:
+            value, ok = QInputDialog.getText(self, "Datasets", "Enter new Dataset name", text=target)
+            if ok and value:
+                cmd = ["zfs", "create", value]
+                self.execute_command(cmd)
+                
+        elif mode == VOLUMES:
+            value1, ok1 = QInputDialog.getText(self, "Volumes", "Enter new Volume name", text=target)
+            if ok1 and value1:
+                value2, ok2 = QInputDialog.getText(self, "Volumes", "Enter volume size", text="10G")
+                if ok2 and value2:
+                    cmd = ["zfs", "create", "-V", value2, value1]
+                    self.execute_command(cmd)
+    
+    def on_rename_click(self):
+        """Handle rename button click"""
+        mode = self.cmb_mode.currentIndex()
+        target = self.get_selected_item()
+        if not target: return
+        
+        if mode in (DATASETS, VOLUMES, SNAPSHOTS):
+            value, ok = QInputDialog.getText(self, "Datasets", f"Enter new name for Dataset {target}", text=target)
+            if ok and value:
+                cmd = ["zfs", "rename", target, value]
+                self.execute_command(cmd)
+                
+        elif mode == POOLS:
+            value, ok = QInputDialog.getText(self, "Pools", f"Enter new name for Pool {target}", text=target)
+            if ok and value:
+                cmd = ["zpool", "rename", target, value]
+                self.execute_command(cmd)
+    
+    def on_copy_click(self):
+        """Handle copy button click"""
+        mode = self.cmb_mode.currentIndex()
+        target = self.get_selected_item()
+        if not target: return
+        
+        if mode == DATASETS:
+            value, ok = QInputDialog.getText(self, "Datasets", f"Enter new Snapshot name for Dataset {target}", text=f"{target}@")
+            if ok and value:
+                cmd = ["zfs", "snapshot", value]
+                self.execute_command(cmd)
+                
+        elif mode == SNAPSHOTS:
+            value, ok = QInputDialog.getText(self, "Datasets", f"Enter new Clone name for Snapshot {target}", text=target)
+            if ok and value:
+                cmd = ["zfs", "clone", target, value]
+                self.execute_command(cmd)
+                
+        elif mode == VOLUMES:
+            value, ok = QInputDialog.getText(self, "Datasets", f"Enter new Snapshot name for Volume {target}", text=f"{target}@")
+            if ok and value:
+                cmd = ["zfs", "snapshot", value]
+                self.execute_command(cmd)
+    
+    def on_up_click(self):
+        """Handle promote button click"""
+        mode = self.cmb_mode.currentIndex()
+        target = self.get_selected_item()
+        if not target: return
+        
+        if mode in (DATASETS, VOLUMES, SNAPSHOTS):
+            reply = QMessageBox.question(self, "Datasets", f"The following dataset will be promoted. Confirm?\n{target}",
+                                       QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+            if reply == QMessageBox.StandardButton.Yes:
+                cmd = ["zfs", "promote", target]
+                self.execute_command(cmd)
+    
+    def on_delete_click(self):
+        """Handle delete button click"""
+        mode = self.cmb_mode.currentIndex()
+        target = self.get_selected_item()
+        if not target: return
+        
+        if mode in (DATASETS, VOLUMES, SNAPSHOTS):
+            reply = QMessageBox.question(self, "Datasets", f"The following dataset will be destroyed. Confirm?\n{target}",
+                                       QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+            if reply == QMessageBox.StandardButton.Yes:
+                cmd = ["zfs", "destroy", target]
+                self.execute_command(cmd)
+                
+        elif mode == POOLS:
+            reply = QMessageBox.question(self, "Pools", f"The following pool will be destroyed. Confirm?\n{target}",
+                                       QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+            if reply == QMessageBox.StandardButton.Yes:
+                cmd = ["zpool", "destroy", target]
+                self.execute_command(cmd)
+    
+    def on_undo_click(self):
+        """Handle undo button click"""
+        mode = self.cmb_mode.currentIndex()
+        target = self.get_selected_item()
+        if not target: return
+        
+        if mode == SNAPSHOTS:
+            reply = QMessageBox.question(self, "Snapshot", f"The dataset will be rolled back to the following snapshot. Confirm?\n{target}",
+                                       QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+            if reply == QMessageBox.StandardButton.Yes:
+                cmd = ["zfs", "rollback", target]
+                self.execute_command(cmd)
+    
+    def on_properties_click(self):
+        """Handle properties button click"""
+        mode = self.cmb_mode.currentIndex()
+        target = self.get_selected_item()
+        if not target: return
+        
+        if mode in (DATASETS, VOLUMES, SNAPSHOTS):
+            cmd = ["zfs", "get", "all", target]
+        elif mode == POOLS:
+            cmd = ["zpool", "get", "all", target]
         else:
             return
-
-        result = subprocess.run(cmd, capture_output=True)
-        output = result.stdout.decode()
-        error = result.stderr.decode()
-
-        if error and "no datasets available" not in error:
-            QMessageBox.critical(self, "Error", error)
+        
+        process = Popen(cmd, stdout=PIPE, stderr=PIPE)
+        stdout, stderr = process.communicate()
+        
+        if stderr:
+            self.error_dialog(stderr.decode('utf-8'))
             return
-
-        lines = output.strip().splitlines()
-        if not lines:
-            return
-
-        headers = lines[0].split()
-        self.model.clear()
-        self.model.setHorizontalHeaderLabels(headers)
-
-        for line in lines[1:]:
-            items = [QStandardItem(value) for value in line.split()]
-            self.model.appendRow(items)
-
-    def on_mode_change(self):
-        self.update_table()
-        # Update button sensitivity if needed (left out for brevity)
-
-    def on_new_click(self):
-        print("New clicked")
-
-    def on_rename_click(self):
-        print("Rename clicked")
-
-    def on_copy_click(self):
-        print("Copy clicked")
-
-    def on_up_click(self):
-        print("Promote clicked")
-
-    def on_undo_click(self):
-        print("Rollback clicked")
-
-    def on_delete_click(self):
-        print("Delete clicked")
-
-    def on_properties_click(self):
-        print("Properties clicked")
-
+        
+        self.list_dialog(stdout.decode('utf-8'))
+    
     def on_about_click(self):
-        QMessageBox.information(self, "About", "Zyggy\nZFS GUI for Linux\nRewritten in PyQt6.")
-
+        """Handle about button click"""
+        about = QMessageBox(self)
+        about.setWindowTitle("About Zyggy")
+        about.setText("<h2>Zyggy</h2>"
+                     "<p>ZFS Administration GUI</p>"
+                     "<p>Version 0.2</p>"
+                     "<p>Copyright © 2021 Manoel de Souza</p>"
+                     "<p>License: The MIT License (MIT)</p>"
+                     "<p><a href='http://github.com/manoeldesouza/zyggy'>Zyggy in GITHUB</a></p>")
+        about.setIcon(QMessageBox.Icon.Information)
+        about.exec()
+    
+    def execute_command(self, cmd):
+        """Execute a command and handle errors"""
+        process = Popen(cmd, stdout=PIPE, stderr=PIPE)
+        _, stderr = process.communicate()
+        
+        if stderr:
+            self.error_dialog(stderr.decode('utf-8'))
+        
+        self.update()
+    
+    def error_dialog(self, msg):
+        """Show error dialog"""
+        QMessageBox.critical(self, "Error", msg)
+    
+    def list_dialog(self, output):
+        """Show a dialog with detailed list output"""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("GET ALL")
+        dialog.resize(800, 600)
+        
+        layout = QVBoxLayout(dialog)
+        
+        tree = QTreeView()
+        model = QStandardItemModel()
+        
+        result = []
+        for line in output.splitlines():
+            rows = re.split(r'\s{2,}', line)
+            result.append(rows)
+        
+        if len(result) > 0:
+            model.setHorizontalHeaderLabels(result[0])
+            
+            for row in result[1:]:
+                items = [QStandardItem(item) for item in row]
+                model.appendRow(items)
+        
+        tree.setModel(model)
+        tree.setSortingEnabled(True)
+        
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setWidget(tree)
+        
+        layout.addWidget(scroll_area)
+        dialog.exec()
 
 if __name__ == "__main__":
     if not has_zfs():
-        print("zfs not found on system. Exiting.")
+        print("ZFS not found")
         sys.exit(1)
-
+    
     app = QApplication(sys.argv)
-    win = ZFSApp()
-    win.show()
+    window = App()
+    window.show()
     sys.exit(app.exec())
